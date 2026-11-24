@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin: Add Reserve Staff / Update Data</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f1f5f9;
+      color: #0f172a;
+      max-width: 760px;
+      margin: 28px auto;
+      padding: 0 16px;
+      line-height: 1.5;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+      margin-bottom: 18px;
+    }
+    h1 { font-size: 22px; color: #0f294a; margin-bottom: 8px; }
+    h2 { font-size: 16px; color: #0f294a; margin-bottom: 8px; }
+    p { font-size: 14px; color: #475569; margin-bottom: 12px; }
+    input[type="file"] {
+      display: block;
+      margin: 12px 0;
+      padding: 10px;
+      border: 2px dashed #cbd5e1;
+      border-radius: 10px;
+      width: 100%;
+      background: #f8fafc;
+    }
+    button {
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 9px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .status {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #ecfdf5;
+      color: #065f46;
+      font-weight: 600;
+      font-size: 13.5px;
+      display: none;
+    }
+    a { color: #2563eb; text-decoration: none; font-weight: 600; }
+    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <p><a href="index.html">&larr; Back to Polling Station Finder</a></p>
+
+  <div class="card">
+    <h1>Add Reserve Staff Excel / CSV to Web App</h1>
+    <p>Upload your <strong>Reserve Staff Excel (.xlsx / .xls / .csv)</strong> file below. This tool merges your Reserve Staff with the existing <strong>2,964 verified records</strong> and generates a fresh <code>data.js</code> file that you can upload directly to your GitHub repository.</p>
+    <p>Supported columns (auto-detected): <code>ELECT_IDNO / EMP_ID / ID</code>, <code>EMP_NAME / NAME</code>, <code>MOBILE / PHONE</code>, <code>DESG / DESIGNATION</code>, <code>OFF_NAME / OFFICE</code>, <code>MANDAL</code>, <code>ROLE / CADRE</code>.</p>
+
+    <input type="file" id="reserveFile" accept=".xlsx,.xls,.csv" />
+    <button id="mergeBtn" disabled>Merge &amp; Download Updated data.js</button>
+    <div id="statusBox" class="status"></div>
+  </div>
+
+  <script src="data.js"></script>
+  <script>
+    const fileInput = document.getElementById('reserveFile');
+    const mergeBtn = document.getElementById('mergeBtn');
+    const statusBox = document.getElementById('statusBox');
+    let parsedReserve = [];
+
+    function pick(row, keys) {
+      const rowKeys = Object.keys(row);
+      for (const k of keys) {
+        const found = rowKeys.find(rk => rk.toUpperCase().replace(/[^A-Z0-9]/g, '').includes(k));
+        if (found && row[found] !== undefined && row[found] !== null && String(row[found]).trim() !== '') {
+          return String(row[found]).trim();
+        }
+      }
+      return '';
+    }
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const wb = XLSX.read(evt.target.result, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        parsedReserve = rows.map(r => {
+          const eid = pick(r, ['ELECTID', 'EMPID', 'IDNO', 'ID']).replace(/\.0$/, '');
+          const name = pick(r, ['EMPNAME', 'NAME', 'CANDIDATE']);
+          const mob = pick(r, ['MOBILE', 'PHONE', 'CONTACT', 'CELL']).replace(/\D/g, '');
+          const desg = pick(r, ['DESG', 'DESIGNATION', 'POST']);
+          const off = pick(r, ['OFFNAME', 'OFFICE', 'SCHOOL', 'WORKPLACE']);
+          const mandal = pick(r, ['MANDAL', 'WORKMANDAL']);
+          const role = pick(r, ['ROLE', 'CADRE', 'CATEGORY']) || 'RES';
+          return { g: '', s: 'R', r: role, i: eid, n: name, d: desg, o: off, m: mandal, p: mob };
+        }).filter(x => x.i || x.n || x.p);
+
+        statusBox.style.display = 'block';
+        statusBox.textContent = `Loaded ${parsedReserve.length} reserve staff records from "${file.name}". Click the button above to download the updated data.js.`;
+        mergeBtn.disabled = parsedReserve.length === 0;
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    mergeBtn.addEventListener('click', () => {
+      const existing = window.ELECTION_DATA || [];
+      const existingIds = new Set(existing.map(x => x.i).filter(Boolean));
+      const newRows = parsedReserve.filter(x => !x.i || !existingIds.has(x.i));
+      const combined = existing.concat(newRows);
+      const assigned = combined.filter(x => x.s === 'A').length;
+      const reserve = combined.filter(x => x.s === 'R').length;
+      const stations = new Set(combined.filter(x => x.s === 'A' && x.g).map(x => x.g)).size;
+
+      const meta = {
+        totalStaff: combined.length,
+        assignedStaff: assigned,
+        reserveStaff: reserve,
+        totalStations: stations,
+        sourceFile: 'Merged Regular + Reserve'
+      };
+
+      const output =
+        '// Election Staff & Polling Station Allotment Data\n' +
+        `window.ELECTION_META = ${JSON.stringify(meta)};\n` +
+        `window.ELECTION_DATA = ${JSON.stringify(combined)};\n`;
+
+      const blob = new Blob([output], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'data.js';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      statusBox.textContent = `Downloaded updated data.js with ${assigned} Assigned + ${reserve} Reserve staff (${combined.length} total). Replace data.js in your GitHub repository to publish.`;
+    });
+  </script>
+</body>
+</html>
