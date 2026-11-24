@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin: Update 2-Sheet Excel Data (Regular + Reserve)</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+      max-width: 760px;
+      margin: 28px auto;
+      padding: 0 16px;
+      line-height: 1.5;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+      margin-bottom: 18px;
+    }
+    h1 { font-size: 21px; color: #0f294a; margin-bottom: 8px; }
+    p { font-size: 14px; color: #475569; margin-bottom: 12px; }
+    label { display: block; font-size: 13px; font-weight: 700; color: #0f294a; margin: 12px 0 4px; }
+    input[type="file"], select {
+      display: block;
+      width: 100%;
+      padding: 10px 12px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 10px;
+      background: #ffffff;
+      font-size: 14px;
+    }
+    .sheet-selectors { display: none; margin-top: 12px; }
+    button {
+      margin-top: 16px;
+      background: #0284c7;
+      color: #ffffff;
+      border: none;
+      padding: 12px 22px;
+      border-radius: 10px;
+      font-size: 14.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { background: #0369a1; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .status {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 9px;
+      background: #ecfdf5;
+      color: #065f46;
+      font-weight: 600;
+      font-size: 13.5px;
+      display: none;
+    }
+    a { color: #0284c7; text-decoration: none; font-weight: 600; }
+    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <p><a href="index.html">&larr; Back to Polling Station Finder</a></p>
+
+  <div class="card">
+    <h1>Generate data.js from 2-Sheet Excel (Regular + Reserve)</h1>
+    <p>Upload your Excel workbook (<code>.xlsx</code> / <code>.xls</code>) containing one sheet for <strong>Regular Polling Station Staff</strong> and another sheet for <strong>Reserve Staff</strong>. Select the sheets below and download the updated <code>data.js</code> to upload to GitHub.</p>
+
+    <label for="excelFile">1. Upload Excel Workbook</label>
+    <input type="file" id="excelFile" accept=".xlsx,.xls" />
+
+    <div id="sheetSelectors" class="sheet-selectors">
+      <label for="regularSheet">2. Select Regular Staff Sheet</label>
+      <select id="regularSheet"></select>
+
+      <label for="reserveSheet">3. Select Reserve Staff Sheet (or None)</label>
+      <select id="reserveSheet"></select>
+    </div>
+
+    <button id="buildBtn" disabled>Build &amp; Download data.js</button>
+    <div id="statusBox" class="status"></div>
+  </div>
+
+  <script>
+    const excelInput = document.getElementById('excelFile');
+    const sheetSelectors = document.getElementById('sheetSelectors');
+    const regularSelect = document.getElementById('regularSheet');
+    const reserveSelect = document.getElementById('reserveSheet');
+    const buildBtn = document.getElementById('buildBtn');
+    const statusBox = document.getElementById('statusBox');
+    let workbook = null;
+
+    const ROLE_DEFS = [
+      ['PO', 'PO_ELECT_IDNO', 'PO_EMP_NAME', 'PO_EMP_DESG', 'PO_OFF_NAME', 'PO_WORK_MANDAL', 'PO_MOBILE'],
+      ['APO', 'APO_ELECT_IDNO', 'APO_EMP_NAME', 'APO_EMP_DESG', 'APO_OFF_NAME', 'APO_WORK_MANDAL', 'APO_MOBILE'],
+      ['OPO-1', 'OPO_ELECT_IDNO_1', 'OPO_EMP_NAME_1', 'OPO_EMP_DESG_1', 'OPO_OFF_NAME_1', 'OPO_WORK_MANDAL_1', 'OPO_MOBILE_1'],
+      ['OPO-2', 'OPO_ELECT_IDNO_2', 'OPO_EMP_NAME_2', 'OPO_EMP_DESG_2', 'OPO_OFF_NAME_2', 'OPO_WORK_MANDAL_2', 'OPO_MOBILE_2'],
+      ['OPO-3', 'OPO_ELECT_IDNO_3', 'OPO_EMP_NAME_3', 'OPO_EMP_DESG_3', 'OPO_OFF_NAME_3', 'OPO_WORK_MANDAL_3', 'OPO_MOBILE_3'],
+      ['OPO-4', 'OPO_ELECT_IDNO_4', 'OPO_EMP_NAME_4', 'OPO_EMP_DESG_4', 'OPO_OFF_NAME_4', 'OPO_WORK_MANDAL_4', 'OPO_MOBILE_4']
+    ];
+
+    function cleanStr(v) {
+      return v === undefined || v === null ? '' : String(v).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+    function cleanId(v) {
+      return cleanStr(v).replace(/\.0$/, '');
+    }
+    function cleanPhone(v) {
+      return cleanStr(v).replace(/\.0$/, '').replace(/\D/g, '');
+    }
+    function pick(row, keys) {
+      const rKeys = Object.keys(row);
+      for (const k of keys) {
+        const found = rKeys.find(rk => rk.toUpperCase().replace(/[^A-Z0-9]/g, '').includes(k));
+        if (found && cleanStr(row[found])) return cleanStr(row[found]);
+      }
+      return '';
+    }
+
+    excelInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        workbook = XLSX.read(evt.target.result, { type: 'array' });
+        const names = workbook.SheetNames;
+
+        regularSelect.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
+        reserveSelect.innerHTML = `<option value="">-- None --</option>` + names.map(n => `<option value="${n}">${n}</option>`).join('');
+
+        // Auto-select likely sheets
+        const regMatch = names.find(n => /regular|sheet1|ps/i.test(n)) || names[0];
+        const resMatch = names.find(n => /reserve|res/i.test(n)) || (names.length > 1 ? names[1] : '');
+        regularSelect.value = regMatch;
+        if (resMatch && resMatch !== regMatch) reserveSelect.value = resMatch;
+
+        sheetSelectors.style.display = 'block';
+        buildBtn.disabled = false;
+        statusBox.style.display = 'block';
+        statusBox.textContent = `Loaded "${file.name}" with ${names.length} sheet(s): ${names.join(', ')}.`;
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    function parseSheet(sheetName, forceReserve) {
+      if (!sheetName || !workbook.Sheets[sheetName]) return [];
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+      if (rows.length === 0) return [];
+
+      const cols = Object.keys(rows[0]);
+      const isWide6Role = cols.includes('PO_ELECT_IDNO') || cols.includes('APO_ELECT_IDNO');
+      const out = [];
+
+      if (isWide6Role) {
+        rows.forEach(row => {
+          const psNo = cleanStr(row['PSNo'] || row['GROUP_NO'] || '');
+          const ward = cleanId(row['Ward '] || row['Ward'] || '');
+          const tableNo = cleanId(row['Table'] || '');
+          const roInfo = cleanStr(row['Name Of Ro'] || row['RO'] || '');
+          const psLoc = cleanStr(row['__EMPTY'] || row['Unnamed: 5'] || row['PS_LOCATION'] || row['LOCATION'] || '');
+          const status = (forceReserve || !psNo) ? 'R' : 'A';
+
+          ROLE_DEFS.forEach(([roleCode, idc, namec, desgc, offc, mandalc, mobc]) => {
+            const eid = cleanId(row[idc]);
+            const name = cleanStr(row[namec]);
+            if (!eid && !name) return;
+            out.push({
+              g: status === 'R' ? '' : psNo,
+              w: status === 'R' ? '' : ward,
+              t: status === 'R' ? '' : tableNo,
+              l: status === 'R' ? '' : psLoc,
+              ro: status === 'R' ? '' : roInfo,
+              s: status,
+              r: roleCode,
+              i: eid,
+              n: name,
+              d: cleanStr(row[desgc]),
+              o: cleanStr(row[offc]),
+              m: cleanStr(row[mandalc]),
+              p: cleanPhone(row[mobc])
+            });
+          });
+        });
+      } else {
+        // Flat 1-row-per-employee sheet (typical for Reserve sheets)
+        rows.forEach(row => {
+          const psNo = forceReserve ? '' : pick(row, ['PSNO', 'GROUPNO', 'POLLINGSTATION']);
+          const status = (forceReserve || !psNo) ? 'R' : 'A';
+          const eid = cleanId(pick(row, ['ELECTID', 'EMPID', 'IDNO', 'ID']));
+          const name = pick(row, ['EMPNAME', 'NAME', 'CANDIDATE']);
+          const mob = cleanPhone(pick(row, ['MOBILE', 'PHONE', 'CONTACT', 'CELL']));
+          if (!eid && !name && !mob) return;
+          out.push({
+            g: psNo,
+            w: forceReserve ? '' : cleanId(pick(row, ['WARD'])),
+            t: forceReserve ? '' : cleanId(pick(row, ['TABLE'])),
+            l: forceReserve ? '' : pick(row, ['LOCATION', 'BUILDING', 'ADDRESS']),
+            ro: forceReserve ? '' : pick(row, ['NAMEOFRO', 'RO']),
+            s: status,
+            r: pick(row, ['ROLE', 'CADRE', 'CATEGORY']) || (status === 'R' ? 'RES' : 'STAFF'),
+            i: eid,
+            n: name,
+            d: pick(row, ['DESG', 'DESIGNATION', 'POST']),
+            o: pick(row, ['OFFNAME', 'OFFICE', 'SCHOOL', 'WORKPLACE']),
+            m: pick(row, ['MANDAL', 'WORKMANDAL']),
+            p: mob
+          });
+        });
+      }
+      return out;
+    }
+
+    buildBtn.addEventListener('click', () => {
+      const regRecords = parseSheet(regularSelect.value, false);
+      const resRecords = parseSheet(reserveSelect.value, true);
+      const combined = regRecords.concat(resRecords);
+
+      const output =
+        '// Election Staff & Polling Station Allotment Data\n' +
+        `window.ELECTION_DATA = ${JSON.stringify(combined)};\n`;
+
+      const blob = new Blob([output], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'data.js';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      statusBox.textContent = `Downloaded data.js (${regRecords.length} regular + ${resRecords.length} reserve = ${combined.length} total records). Upload data.js to your GitHub repo to publish.`;
+    });
+  </script>
+</body>
+</html>
